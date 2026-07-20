@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { loginWithEmailCode, loginWithPhoneCode, sendEmailVerificationCode, sendPhoneVerificationCode } from '@howone/sdk'
 import { Camera, CloudRain, Compass, ExternalLink, ImagePlus, Languages, LogOut, MapPin, Mic, Play, RotateCcw, Search, ShieldCheck, Sparkles, UserRound, Volume2, X } from 'lucide-react'
-import howone from '@/lib/sdk'
+import howone, { type ItineraryDayRecord, type TripRecord } from '@/lib/sdk'
 
 type SignedInUser = { id: string; email?: string; name?: string }
 type Place = { displayName: string; lat: number; lon: number; osmUrl: string }
@@ -41,7 +41,9 @@ function App() {
   const [weatherState, setWeatherState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [trip, setTrip] = useState({ title: '', arrivalDate: '', departureDate: '', familySummary: '', preferences: '' })
   const [itinerary, setItinerary] = useState<string | null>(null)
-  const [itineraryState, setItineraryState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [itineraryState, setItineraryState] = useState<'idle' | 'loading' | 'saving' | 'error'>('idle')
+  const [itineraryHistory, setItineraryHistory] = useState<Array<{ trip: TripRecord; day: ItineraryDayRecord }>>([])
+  const [historyState, setHistoryState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [guideSource, setGuideSource] = useState<GuideSource | null>(null)
   const [guideText, setGuideText] = useState<string | null>(null)
   const [guideState, setGuideState] = useState<'idle' | 'loading' | 'error'>('idle')
@@ -84,6 +86,10 @@ function App() {
   useEffect(() => () => {
     liveAudioWorkletRef.current?.disconnect(); liveAudioSourceRef.current?.disconnect(); liveAudioSinkRef.current?.disconnect(); void liveAudioContextRef.current?.close(); liveSocketRef.current?.close(); liveStreamRef.current?.getTracks().forEach(track => track.stop())
   }, [])
+  useEffect(() => {
+    if (!user) { setItineraryHistory([]); setHistoryState('idle'); return }
+    void loadItineraryHistory()
+  }, [user?.id])
 
   function requireLogin() { if (user) return true; setShowLogin(true); setLoginError(''); return false }
   async function sendCode() {
@@ -108,7 +114,7 @@ function App() {
       setUser(profile as SignedInUser); setShowLogin(false); setNotice('已登录。你创建的旅行记录仅保存在自己的账户中。')
     } catch { setLoginError('验证码不正确或已失效，请重新获取。') } finally { setLoginBusy(false) }
   }
-  async function signOut() { await howone.auth.logout({ redirect: false }); setUser(null); clearCreatedResults(); setNotice('你已退出登录。') }
+  async function signOut() { await howone.auth.logout({ redirect: false }); setUser(null); setItineraryHistory([]); clearCreatedResults(); setNotice('你已退出登录。') }
   function clearCreatedResults() { setItinerary(null); setGuideSource(null); setGuideText(null); setAudioUrl(null); setTranslation(null); setImagePreview(null) }
 
   async function searchPlaces() {
@@ -133,17 +139,37 @@ function App() {
       setWeather({ label: weatherLabel(data.current.weather_code), temperature: data.current.temperature_2m, apparent: data.current.apparent_temperature, observedAt: data.current.time }); setWeatherState('idle')
     } catch { setWeatherState('error'); setNotice('天气服务暂不可用。不会用估算天气替代。') }
   }
+  async function loadItineraryHistory() {
+    if (!user) return
+    setHistoryState('loading')
+    try {
+      const trips = await howone.entities.Trip.query.mine({ page: { number: 1, size: 20 }, orderBy: { updatedDate: 'desc' } })
+      const entries = await Promise.all(trips.items.map(async trip => {
+        const days = await howone.entities.ItineraryDay.query.mine({ where: { tripId: trip.id }, page: { number: 1, size: 1 }, orderBy: { dayNumber: 'asc' } })
+        return days.items[0] ? { trip, day: days.items[0] } : null
+      }))
+      setItineraryHistory(entries.filter((entry): entry is { trip: TripRecord; day: ItineraryDayRecord } => entry !== null))
+      setHistoryState('idle')
+    } catch {
+      setHistoryState('error')
+    }
+  }
   async function generateItinerary() {
     if (!requireLogin()) return
     if (!selectedPlace || !trip.title || !trip.arrivalDate || !trip.departureDate || !trip.familySummary || !trip.preferences) { setItineraryState('error'); setNotice('请先填写完整行程信息并选择目的地。'); return }
     setItineraryState('loading'); setItinerary(null)
+    let savedTrip: TripRecord | null = null
     try {
-      const savedTrip = await howone.entities.Trip.create({ title: trip.title, arrivalDate: trip.arrivalDate, departureDate: trip.departureDate, destinations: [selectedPlace.displayName], familySummary: trip.familySummary, preferences: trip.preferences })
       const weatherContext = weather ? `${selectedPlace.displayName}：${weather.label}，${weather.temperature}°C，体感 ${weather.apparent}°C，数据时间 ${weather.observedAt}。来源 Open-Meteo。` : '当前天气数据未能取得，请不要假设天气情况。'
       const result = await howone.ai.generateFamilyItinerary.run({ trip_brief: `目的地：${selectedPlace.displayName}（坐标 ${selectedPlace.lat}, ${selectedPlace.lon}）。抵达：${trip.arrivalDate}。离开：${trip.departureDate}。家庭：${trip.familySummary}。偏好：${trip.preferences}。仅基于此用户填写信息和提供的真实地点信息安排，不要虚构场馆开放或临时关闭状态。`, weather_context: weatherContext, language: '简体中文' })
-      await howone.entities.ItineraryDay.create({ tripId: savedTrip.id, dayNumber: 1, title: trip.title, planContent: result.itinerary_plan, status: 'ready', weatherSummary: weather ? weatherContext : null })
-      setItinerary(result.itinerary_plan); setItineraryState('idle'); setNotice('行程已生成并保存到你的私密账户。')
-    } catch { setItineraryState('error'); setNotice('行程生成失败，未使用任何预设行程替代。请检查输入后重试。') }
+      setItineraryState('saving')
+      savedTrip = await howone.entities.Trip.create({ title: trip.title, arrivalDate: trip.arrivalDate, departureDate: trip.departureDate, destinations: [selectedPlace.displayName], familySummary: trip.familySummary, preferences: trip.preferences })
+      const savedDay = await howone.entities.ItineraryDay.create({ tripId: savedTrip.id, dayNumber: 1, title: trip.title, planContent: result.itinerary_plan, status: 'ready', weatherSummary: weather ? weatherContext : null })
+      setItinerary(result.itinerary_plan); setItineraryHistory(history => [{ trip: savedTrip!, day: savedDay }, ...history.filter(item => item.trip.id !== savedTrip!.id)]); setHistoryState('idle'); setItineraryState('idle'); setNotice('行程已生成并保存到你的私密账户。')
+    } catch {
+      if (savedTrip) await howone.entities.Trip.delete(savedTrip.id).catch(() => undefined)
+      setItineraryState('error'); setNotice('行程生成或保存失败，未显示任何预设行程。请检查网络后重试。')
+    }
   }
   async function loadGuideSource() {
     if (!requireLogin()) return
@@ -313,7 +339,7 @@ function App() {
     {!user && !authLoading && <section className="signin-banner"><ShieldCheck size={19}/><div><b>登录后创建私密旅行记录</b><span>AI 结果、图片与导览只会在你完成登录后生成和保存。</span></div><button onClick={() => setShowLogin(true)}>去登录</button></section>}
     {notice && <div className="notice" role="status"><Sparkles size={15}/>{notice}<button onClick={() => setNotice('')} aria-label="关闭提示"><X size={14}/></button></div>}
     <section className="content-block source-form"><div className="section-head"><div><p>地点与天气</p><h2>选好目的地再出发</h2></div></div><div className="place-search"><input value={placeQuery} onChange={e => setPlaceQuery(e.target.value)} placeholder="输入英国城市、景点或地址" /><button className="btn btn-primary" onClick={searchPlaces} disabled={placeState === 'loading'}>{placeState === 'loading' ? '查询中…' : <><Search size={17}/>查询地点</>}</button></div><p className="data-note">地点坐标与地址：<a href={OSM_SOURCE} target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>。公开 Nominatim 服务有频率限制，请手动查询而非连续搜索。</p>{places.length > 0 && <div className="place-results">{places.map(place => <button className={selectedPlace?.osmUrl === place.osmUrl ? 'place-result selected' : 'place-result'} key={place.osmUrl} onClick={() => selectPlace(place)}><MapPin size={17}/><span>{place.displayName}</span><ExternalLink size={15}/></button>)}</div>}{placeState === 'error' && <p className="empty-state">地点服务当前不可用。请稍后手动重试。</p>}</section>
-    {active === 'plan' && <section className="content-block"><div className="section-head"><div><p>旅行资料</p><h2>填写后再生成</h2></div></div><div className="trip-form"><label>这趟旅行的名称<input value={trip.title} onChange={e => setTrip({ ...trip, title: e.target.value })} placeholder="例如：暑假英国亲子行" /></label><label>抵达日期<input type="date" value={trip.arrivalDate} onChange={e => setTrip({ ...trip, arrivalDate: e.target.value })} /></label><label>离开日期<input type="date" value={trip.departureDate} onChange={e => setTrip({ ...trip, departureDate: e.target.value })} /></label><label>家庭组成<input value={trip.familySummary} onChange={e => setTrip({ ...trip, familySummary: e.target.value })} placeholder="例如：2位成人，1位7岁儿童" /></label><label>旅行偏好<input value={trip.preferences} onChange={e => setTrip({ ...trip, preferences: e.target.value })} placeholder="例如：亲子、节奏舒缓、减少换乘" /></label></div><button className="btn btn-primary" onClick={generateItinerary} disabled={itineraryState === 'loading'}>{itineraryState === 'loading' ? '正在生成…' : '生成我的行程'}</button>{itinerary && <article className="created-result"><b>你的新行程</b><p>{itinerary}</p><small>由你填写的信息、所选地点与可取得的天气数据生成。场馆闭馆、临时限制与票务余量未验证，请查看官方公告。</small></article>}{itineraryState === 'error' && <p className="empty-state">没有生成任何行程。请完善信息后重试。</p>}</section>}
+    {active === 'plan' && <section className="content-block"><div className="section-head"><div><p>旅行资料</p><h2>填写后再生成</h2></div></div><div className="trip-form"><label>这趟旅行的名称<input value={trip.title} onChange={e => setTrip({ ...trip, title: e.target.value })} placeholder="例如：暑假英国亲子行" /></label><label>抵达日期<input type="date" value={trip.arrivalDate} onChange={e => setTrip({ ...trip, arrivalDate: e.target.value })} /></label><label>离开日期<input type="date" value={trip.departureDate} onChange={e => setTrip({ ...trip, departureDate: e.target.value })} /></label><label>家庭组成<input value={trip.familySummary} onChange={e => setTrip({ ...trip, familySummary: e.target.value })} placeholder="例如：2位成人，1位7岁儿童" /></label><label>旅行偏好<input value={trip.preferences} onChange={e => setTrip({ ...trip, preferences: e.target.value })} placeholder="例如：亲子、节奏舒缓、减少换乘" /></label></div><button className="btn btn-primary" onClick={generateItinerary} disabled={itineraryState === 'loading' || itineraryState === 'saving'}>{itineraryState === 'loading' ? '正在生成…' : itineraryState === 'saving' ? '正在保存…' : '生成我的行程'}</button>{itinerary && <article className="created-result"><b>你的新行程</b><p>{itinerary}</p><small>由你填写的信息、所选地点与可取得的天气数据生成。场馆闭馆、临时限制与票务余量未验证，请查看官方公告。</small></article>}{itineraryState === 'error' && <p className="empty-state">没有生成或保存任何行程。请检查网络后重试。</p>}<div className="history-block"><div className="section-head"><div><p>我的私密记录</p><h2>已保存的行程</h2></div><button className="text-button" onClick={() => void loadItineraryHistory()} disabled={historyState === 'loading'}>{historyState === 'loading' ? '读取中…' : '刷新记录'}</button></div>{!user ? <p className="empty-state">登录后可查看仅属于你的已保存行程。</p> : historyState === 'loading' ? <p className="empty-state">正在读取你的私密行程记录…</p> : historyState === 'error' ? <div className="empty-state"><p>暂时无法读取已保存行程。请检查网络后重试。</p><button className="text-button" onClick={() => void loadItineraryHistory()}>重新读取</button></div> : itineraryHistory.length === 0 ? <p className="empty-state">还没有已保存的行程。生成成功后会自动显示在这里。</p> : <div className="history-list">{itineraryHistory.map(item => <article className="created-result" key={item.trip.id}><b>{item.trip.title}</b><small>{item.trip.arrivalDate} 至 {item.trip.departureDate} · {item.trip.destinations.join('、')}</small><p>{item.day.planContent}</p><button className="text-button" onClick={() => { setItinerary(item.day.planContent); setNotice('已打开这份已保存行程。') }}>查看行程</button></article>)}</div>}</div></section>}
     {active === 'guide' && <section className="content-block"><div className="section-head"><div><p>景点小档案</p><h2>选点后了解更多</h2></div></div>{!selectedPlace ? <p className="empty-state">先在“行程”中查询并选择目的地，再查看景点资料。</p> : <><button className="btn btn-primary" onClick={loadGuideSource} disabled={guideState === 'loading'}>{guideState === 'loading' ? '读取资料中…' : '查看景点资料'}</button>{guideSource && <article className="source-card"><b>{guideSource.name}</b><p>{guideSource.excerpt}</p><a href={guideSource.url} target="_blank" rel="noreferrer">查看来源：Wikipedia <ExternalLink size={14}/></a><button className="btn btn-outline" onClick={generateGuide} disabled={guideState === 'loading'}>基于此资料生成中文导览</button></article>}{guideText && <article className="created-result"><b>AI 生成的中文导览</b><p>{guideText}</p><small>此导览是基于上方公开资料的生成性解读，可能包含不确定之处；请以来源页面为准。</small><button className="play-button" onClick={generateAudio} disabled={audioState === 'loading'}>{audioState === 'loading' ? '生成语音中…' : <><Play size={17} fill="currentColor"/>从此导览生成语音</>}</button></article>}{audioUrl && <audio className="audio-player" controls src={audioUrl}>你的浏览器暂不支持音频播放。</audio>}{guideState === 'error' && <div className="empty-state"><p>景点资料暂时未能取得。请稍后重试。</p><button className="text-button" onClick={loadGuideSource}>重试查询</button><span>也可以返回“行程”页，用更具体的景点名称重新查询。</span></div>}</>}</section>}
     {active === 'translate' && <section className="content-block translator"><div className="section-head"><div><p>用户上传的图片</p><h2>上传后才翻译</h2></div><span className="small-tag">不展示演示翻译</span></div><input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={e => handleImage(e.target.files?.[0])} hidden /><button className="capture-zone" onClick={() => { if (requireLogin()) fileRef.current?.click() }} disabled={translateState === 'loading'}>{imagePreview ? <img src={imagePreview} alt="你选择的待翻译图片"/> : <><Camera size={34}/><b>拍照或上传英文信息</b><span>仅在你选择图片后上传并调用翻译</span></>}{translateState === 'loading' && <i>翻译中…</i>}</button>{translation && <article className="translation-result"><div className="annotated-label">你的翻译结果</div><p>{translation}</p><small>结果来自你上传的图片。若服务支持，将在记录中保存标注图。</small></article>}{translateState === 'error' && <p className="empty-state">没有生成翻译结果。请重新选择图片后重试。</p>}</section>}
     {active === 'voice' && <section className="content-block voice-chat"><div className="section-head"><div><p>面对面沟通</p><h2>实时沟通</h2></div><Languages size={22}/></div><p className="voice-intro">快速完成“录一段—翻译—播放”的对话回合，不会后台录音，也不是逐字同传。</p><div className="voice-direction"><button className={voiceDirection === 'zh-en' ? 'selected' : ''} onClick={() => setVoiceDirection('zh-en')}>我说中文</button><button className={voiceDirection === 'en-zh' ? 'selected' : ''} onClick={() => setVoiceDirection('en-zh')}>对方说英文</button></div><div className="voice-scenarios"><span>餐厅</span><span>酒店</span><span>交通</span></div><button className={`voice-record ${voiceState === 'recording' ? 'recording' : ''}`} onClick={voiceState === 'recording' ? stopVoiceTurn : startVoiceTurn} disabled={voiceState === 'processing'}>{voiceState === 'recording' ? <><Mic size={28}/>结束录音</> : voiceState === 'processing' ? <>正在翻译…</> : <><Mic size={28}/>开始说话</>}</button><p className="voice-privacy">仅处理你主动录制的这一段语音。录音不会保存；本次对话文字仅保留在当前页面。</p>{voiceError && <div className="empty-state"><p>{voiceError}</p><button className="text-button" onClick={() => { setVoiceError(''); if (voiceState === 'error') setVoiceState('idle') }}><RotateCcw size={14}/>重新尝试</button></div>}<div className="voice-turns">{voiceTurns.length === 0 ? <p className="empty-state">录制第一句话后，会在这里显示中英双语内容。</p> : voiceTurns.map(turn => <article className="voice-turn" key={turn.id}><small>{turn.direction === 'zh-en' ? '中文 → English' : 'English → 中文'}</small><p>{turn.original}</p><strong>{turn.translation}</strong><button className="play-button" onClick={() => playVoiceTurn(turn.audioUrl)}><Play size={16} fill="currentColor"/>播放译文</button></article>)}</div></section>}
