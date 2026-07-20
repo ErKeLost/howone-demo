@@ -55,19 +55,24 @@ function App() {
   const [voiceError, setVoiceError] = useState('')
   const [voiceTurns, setVoiceTurns] = useState<Array<{ id: string; original: string; translation: string; direction: 'zh-en' | 'en-zh'; audioUrl: string }>>([])
   const recorderRef = useRef<MediaRecorder | null>(null)
-  const [liveDirection, setLiveDirection] = useState<'zh-en' | 'en-zh'>('zh-en')
+  const liveDirection = 'zh-en' as const
   const [liveScenario, setLiveScenario] = useState('日常交流')
   const [liveState, setLiveState] = useState<'idle' | 'connecting' | 'connected' | 'paused' | 'error'>('idle')
   const [liveError, setLiveError] = useState('')
   const [liveAutoPlay, setLiveAutoPlay] = useState(true)
   const [liveTurns, setLiveTurns] = useState<Array<{ id: string; original: string; translation: string; direction: 'zh-en' | 'en-zh' }>>([])
   const liveSocketRef = useRef<WebSocket | null>(null)
-  const liveRecorderRef = useRef<MediaRecorder | null>(null)
   const liveStreamRef = useRef<MediaStream | null>(null)
+  const liveAudioContextRef = useRef<AudioContext | null>(null)
+  const liveAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const liveAudioWorkletRef = useRef<AudioWorkletNode | null>(null)
+  const liveAudioSinkRef = useRef<GainNode | null>(null)
   const liveAudioRef = useRef<HTMLAudioElement | null>(null)
   const liveAudioChunksRef = useRef<Uint8Array[]>([])
   const liveDraftRef = useRef({ original: '', translation: '' })
   const liveStartRef = useRef(false)
+  const liveEndingRef = useRef(false)
+  const liveAutoPlayRef = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -75,8 +80,9 @@ function App() {
     howone.me().then(profile => { if (activeSession && profile) setUser(profile as SignedInUser) }).catch(() => undefined).finally(() => { if (activeSession) setAuthLoading(false) })
     return () => { activeSession = false }
   }, [])
+  useEffect(() => { liveAutoPlayRef.current = liveAutoPlay }, [liveAutoPlay])
   useEffect(() => () => {
-    liveRecorderRef.current?.stop(); liveSocketRef.current?.close(); liveStreamRef.current?.getTracks().forEach(track => track.stop())
+    liveAudioWorkletRef.current?.disconnect(); liveAudioSourceRef.current?.disconnect(); liveAudioSinkRef.current?.disconnect(); void liveAudioContextRef.current?.close(); liveSocketRef.current?.close(); liveStreamRef.current?.getTracks().forEach(track => track.stop())
   }, [])
 
   function requireLogin() { if (user) return true; setShowLogin(true); setLoginError(''); return false }
@@ -230,9 +236,10 @@ function App() {
     return `You are a live travel interpreter for a ${liveScenario} conversation in the UK. Listen to ${source} and immediately speak only a natural ${target} translation. Do not add explanations, labels, greetings, or answers of your own. Preserve names, numbers, prices, addresses, and requests exactly. Keep every response concise.`
   }
   function endLiveSession(clear = true) {
+    liveEndingRef.current = true
     if (liveSocketRef.current?.readyState === WebSocket.OPEN) liveSocketRef.current.send(JSON.stringify({ type: 'stop' }))
-    liveRecorderRef.current?.stop(); liveSocketRef.current?.close(); liveStreamRef.current?.getTracks().forEach(track => track.stop())
-    liveRecorderRef.current = null; liveSocketRef.current = null; liveStreamRef.current = null; liveStartRef.current = false
+    liveAudioWorkletRef.current?.disconnect(); liveAudioSourceRef.current?.disconnect(); liveAudioSinkRef.current?.disconnect(); void liveAudioContextRef.current?.close(); liveSocketRef.current?.close(); liveStreamRef.current?.getTracks().forEach(track => track.stop())
+    liveAudioWorkletRef.current = null; liveAudioSourceRef.current = null; liveAudioSinkRef.current = null; liveAudioContextRef.current = null; liveSocketRef.current = null; liveStreamRef.current = null; liveStartRef.current = false
     if (liveAudioRef.current) { liveAudioRef.current.pause(); liveAudioRef.current = null }
     liveAudioChunksRef.current = []
     if (clear) setLiveTurns([])
@@ -246,30 +253,53 @@ function App() {
   }
   async function startLiveSession() {
     if (!requireLogin() || liveStartRef.current || liveState === 'connecting') return
-    if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket || !window.MediaRecorder) { setLiveState('error'); setLiveError('此浏览器不支持实时语音所需功能，请使用较新的浏览器后重试。'); return }
-    liveStartRef.current = true; setLiveState('connecting'); setLiveError('')
+    if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket || !window.AudioContext || !window.AudioWorkletNode) { setLiveState('error'); setLiveError('此浏览器不支持实时语音所需功能，请使用较新的浏览器后重试。'); return }
+    liveStartRef.current = true; liveEndingRef.current = false; setLiveState('connecting'); setLiveError('')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
       const socket = new WebSocket(`${protocol}://${location.host}/api/volcengine/live`)
       const scenarioCode: Record<string, 'restaurant' | 'hotel' | 'transport' | 'everyday'> = { '餐厅': 'restaurant', '酒店': 'hotel', '交通': 'transport', '日常交流': 'everyday' }
-      const timeout = window.setTimeout(() => { if (socket.readyState !== WebSocket.OPEN) socket.close(); setLiveState('error'); setLiveError('实时沟通连接超时，请检查网络后重试。') }, 15_000)
+      const timeout = window.setTimeout(() => { if (!liveStartRef.current) return; socket.close(); liveStartRef.current = false; setLiveState('error'); setLiveError('实时沟通连接超时，请检查网络后重试。') }, 15_000)
       liveStreamRef.current = stream; liveSocketRef.current = socket
       socket.onopen = () => socket.send(JSON.stringify({ type: 'start', direction: liveDirection, scenario: scenarioCode[liveScenario] ?? 'everyday' }))
-      socket.onmessage = event => {
+      socket.onmessage = async event => {
         try {
           const message = JSON.parse(event.data) as { type?: string; text?: string; interim?: boolean; data?: string; message?: string }
-          if (message.type === 'ready') { window.clearTimeout(timeout); setLiveState('connected'); liveStartRef.current = false; const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : undefined }); recorder.ondataavailable = async chunk => { if (!chunk.data.size || socket.readyState !== WebSocket.OPEN) return; const bytes = new Uint8Array(await chunk.data.arrayBuffer()); let binary = ''; bytes.forEach(byte => { binary += String.fromCharCode(byte) }); socket.send(JSON.stringify({ type: 'audio', data: btoa(binary) })) }; recorder.start(20); liveRecorderRef.current = recorder }
+          if (message.type === 'ready') {
+            window.clearTimeout(timeout)
+            const audioContext = new AudioContext()
+            await audioContext.audioWorklet.addModule('/pcm-capture.worklet.js')
+            const source = audioContext.createMediaStreamSource(stream)
+            const worklet = new AudioWorkletNode(audioContext, 'pcm-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
+            const sink = audioContext.createGain()
+            sink.gain.value = 0
+            worklet.port.onmessage = ({ data }: MessageEvent<ArrayBuffer>) => {
+              if (socket.readyState !== WebSocket.OPEN) return
+              const bytes = new Uint8Array(data)
+              let binary = ''
+              for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index])
+              socket.send(JSON.stringify({ type: 'audio', data: btoa(binary) }))
+            }
+            source.connect(worklet); worklet.connect(sink); sink.connect(audioContext.destination)
+            await audioContext.resume()
+            liveAudioContextRef.current = audioContext; liveAudioSourceRef.current = source; liveAudioWorkletRef.current = worklet; liveAudioSinkRef.current = sink
+            setLiveState('connected'); liveStartRef.current = false
+          }
           if (message.type === 'asr' && message.text) liveDraftRef.current.original = message.text
           if (message.type === 'translation' && message.text) liveDraftRef.current.translation += message.text
           if (message.type === 'audio' && message.data) { const binary = atob(message.data); liveAudioChunksRef.current.push(Uint8Array.from(binary, char => char.charCodeAt(0))) }
-          if (message.type === 'audio-end' && liveAudioChunksRef.current.length) { const clip = new Blob(liveAudioChunksRef.current, { type: 'audio/ogg; codecs=opus' }); liveAudioChunksRef.current = []; const audio = new Audio(URL.createObjectURL(clip)); audio.muted = !liveAutoPlay; liveAudioRef.current = audio; if (liveAutoPlay) void audio.play().catch(() => setLiveError('译文语音已生成，但浏览器阻止了自动播放。请开启自动播放后重试。')) }
+          if (message.type === 'audio-end' && liveAudioChunksRef.current.length) { const clip = new Blob(liveAudioChunksRef.current, { type: 'audio/ogg; codecs=opus' }); liveAudioChunksRef.current = []; const objectUrl = URL.createObjectURL(clip); const audio = new Audio(objectUrl); audio.onended = () => URL.revokeObjectURL(objectUrl); audio.muted = !liveAutoPlayRef.current; liveAudioRef.current = audio; if (liveAutoPlayRef.current) void audio.play().catch(() => setLiveError('译文语音已生成，但浏览器阻止了自动播放。请开启自动播放后重试。')) }
           if (message.type === 'turn-end') commitLiveTurn()
           if (message.type === 'error') { endLiveSession(false); setLiveState('error'); setLiveError(message.message || '实时沟通服务返回错误，请重新连接。') }
-        } catch { setLiveError('实时沟通返回了无法识别的数据。') }
+        } catch {
+          endLiveSession(false)
+          setLiveState('error')
+          setLiveError('实时音频初始化失败，请刷新页面后重试。')
+        }
       }
-      socket.onerror = () => { window.clearTimeout(timeout); if (liveState !== 'connected') { endLiveSession(false); setLiveState('error'); setLiveError('无法连接实时沟通服务，请检查网络后重试。') } }
-      socket.onclose = () => { window.clearTimeout(timeout); if (liveState === 'connecting') { setLiveState('error'); setLiveError('实时沟通连接已关闭，请重新连接。') } }
+      socket.onerror = () => { window.clearTimeout(timeout); if (!liveEndingRef.current) { endLiveSession(false); setLiveState('error'); setLiveError('无法连接实时沟通服务，请检查网络后重试。') } }
+      socket.onclose = () => { window.clearTimeout(timeout); if (!liveEndingRef.current) { endLiveSession(false); setLiveState('error'); setLiveError('实时沟通连接已关闭，请重新连接。') } }
     } catch { endLiveSession(false); setLiveState('error'); setLiveError('未获得麦克风权限。请在浏览器设置中允许麦克风后重试。') }
   }
   function toggleLivePause() {
@@ -277,11 +307,6 @@ function App() {
     liveStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = !paused })
     setLiveState(paused ? 'paused' : 'connected')
   }
-  function switchLiveDirection(direction: 'zh-en' | 'en-zh') {
-    setLiveDirection(direction)
-    if (liveState === 'connected') setNotice('请结束当前沟通后切换翻译方向。')
-  }
-
   return <main className="app-shell">
     <header className="topbar"><button className="brand" onClick={() => setActive('plan')} aria-label="英伦旅伴首页"><span className="brand-dot" />英伦旅伴</button><span className="data-mode">家庭旅行助手</span>{authLoading ? <span className="auth-loading">登录状态…</span> : user ? <div className="account-menu"><span><UserRound size={16}/>{user.name || user.email || '已登录'}</span><button onClick={signOut}><LogOut size={16}/>退出</button></div> : <button className="login-entry" onClick={() => setShowLogin(true)}><ShieldCheck size={16}/>登录</button>}</header>
     <section className="hero"><div className="hero-copy"><p>为一家人的英国旅行准备</p><h1>{active === 'plan' ? '旅行行程' : active === 'guide' ? '景点导览' : active === 'translate' ? '图片翻译' : '沟通'}<span className="hero-mark" /></h1><span>从你的目的地与偏好出发，慢慢安排。</span></div>{selectedPlace ? <div className="weather-card"><CloudRain size={22}/><div><strong>{weather ? `${selectedPlace.displayName} · ${weather.label} · ${weather.temperature}°C` : weatherState === 'loading' ? '正在读取天气…' : '暂无天气数据'}</strong><small>{weather ? `体感 ${weather.apparent}°C · 数据时间 ${weather.observedAt}` : '天气仅在选择地点后尝试获取'}</small></div></div> : <div className="weather-card"><CloudRain size={22}/><div><strong>尚未选择地点</strong><small>选择真实地点后才会请求天气数据</small></div></div>}</section>
@@ -292,7 +317,7 @@ function App() {
     {active === 'guide' && <section className="content-block"><div className="section-head"><div><p>景点小档案</p><h2>选点后了解更多</h2></div></div>{!selectedPlace ? <p className="empty-state">先在“行程”中查询并选择目的地，再查看景点资料。</p> : <><button className="btn btn-primary" onClick={loadGuideSource} disabled={guideState === 'loading'}>{guideState === 'loading' ? '读取资料中…' : '查看景点资料'}</button>{guideSource && <article className="source-card"><b>{guideSource.name}</b><p>{guideSource.excerpt}</p><a href={guideSource.url} target="_blank" rel="noreferrer">查看来源：Wikipedia <ExternalLink size={14}/></a><button className="btn btn-outline" onClick={generateGuide} disabled={guideState === 'loading'}>基于此资料生成中文导览</button></article>}{guideText && <article className="created-result"><b>AI 生成的中文导览</b><p>{guideText}</p><small>此导览是基于上方公开资料的生成性解读，可能包含不确定之处；请以来源页面为准。</small><button className="play-button" onClick={generateAudio} disabled={audioState === 'loading'}>{audioState === 'loading' ? '生成语音中…' : <><Play size={17} fill="currentColor"/>从此导览生成语音</>}</button></article>}{audioUrl && <audio className="audio-player" controls src={audioUrl}>你的浏览器暂不支持音频播放。</audio>}{guideState === 'error' && <div className="empty-state"><p>景点资料暂时未能取得。请稍后重试。</p><button className="text-button" onClick={loadGuideSource}>重试查询</button><span>也可以返回“行程”页，用更具体的景点名称重新查询。</span></div>}</>}</section>}
     {active === 'translate' && <section className="content-block translator"><div className="section-head"><div><p>用户上传的图片</p><h2>上传后才翻译</h2></div><span className="small-tag">不展示演示翻译</span></div><input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={e => handleImage(e.target.files?.[0])} hidden /><button className="capture-zone" onClick={() => { if (requireLogin()) fileRef.current?.click() }} disabled={translateState === 'loading'}>{imagePreview ? <img src={imagePreview} alt="你选择的待翻译图片"/> : <><Camera size={34}/><b>拍照或上传英文信息</b><span>仅在你选择图片后上传并调用翻译</span></>}{translateState === 'loading' && <i>翻译中…</i>}</button>{translation && <article className="translation-result"><div className="annotated-label">你的翻译结果</div><p>{translation}</p><small>结果来自你上传的图片。若服务支持，将在记录中保存标注图。</small></article>}{translateState === 'error' && <p className="empty-state">没有生成翻译结果。请重新选择图片后重试。</p>}</section>}
     {active === 'voice' && <section className="content-block voice-chat"><div className="section-head"><div><p>面对面沟通</p><h2>实时沟通</h2></div><Languages size={22}/></div><p className="voice-intro">快速完成“录一段—翻译—播放”的对话回合，不会后台录音，也不是逐字同传。</p><div className="voice-direction"><button className={voiceDirection === 'zh-en' ? 'selected' : ''} onClick={() => setVoiceDirection('zh-en')}>我说中文</button><button className={voiceDirection === 'en-zh' ? 'selected' : ''} onClick={() => setVoiceDirection('en-zh')}>对方说英文</button></div><div className="voice-scenarios"><span>餐厅</span><span>酒店</span><span>交通</span></div><button className={`voice-record ${voiceState === 'recording' ? 'recording' : ''}`} onClick={voiceState === 'recording' ? stopVoiceTurn : startVoiceTurn} disabled={voiceState === 'processing'}>{voiceState === 'recording' ? <><Mic size={28}/>结束录音</> : voiceState === 'processing' ? <>正在翻译…</> : <><Mic size={28}/>开始说话</>}</button><p className="voice-privacy">仅处理你主动录制的这一段语音。录音不会保存；本次对话文字仅保留在当前页面。</p>{voiceError && <div className="empty-state"><p>{voiceError}</p><button className="text-button" onClick={() => { setVoiceError(''); if (voiceState === 'error') setVoiceState('idle') }}><RotateCcw size={14}/>重新尝试</button></div>}<div className="voice-turns">{voiceTurns.length === 0 ? <p className="empty-state">录制第一句话后，会在这里显示中英双语内容。</p> : voiceTurns.map(turn => <article className="voice-turn" key={turn.id}><small>{turn.direction === 'zh-en' ? '中文 → English' : 'English → 中文'}</small><p>{turn.original}</p><strong>{turn.translation}</strong><button className="play-button" onClick={() => playVoiceTurn(turn.audioUrl)}><Play size={16} fill="currentColor"/>播放译文</button></article>)}</div></section>}
-    {active === 'live' && <section className="content-block live-chat"><div className="section-head"><div><p>连续双语对话</p><h2>实时翻译</h2></div><span className={`live-state ${liveState}`}>{liveState === 'connected' ? '已连接' : liveState === 'connecting' ? '正在连接' : liveState === 'paused' ? '已暂停' : '未开始'}</span></div><p className="voice-intro">开始后才会使用麦克风。系统会连续翻译当前说话方向；结束会话即停止收音并清空临时文字。</p><div className="voice-direction"><button className={liveDirection === 'zh-en' ? 'selected' : ''} onClick={() => switchLiveDirection('zh-en')}>我说中文</button><button className={liveDirection === 'en-zh' ? 'selected' : ''} onClick={() => switchLiveDirection('en-zh')}>对方说英文</button></div><div className="live-scenarios">{['餐厅', '酒店', '交通', '日常交流'].map(scenario => <button key={scenario} className={liveScenario === scenario ? 'selected' : ''} onClick={() => setLiveScenario(scenario)} disabled={liveState === 'connected' || liveState === 'paused'}>{scenario}</button>)}</div><label className="autoplay-control"><input type="checkbox" checked={liveAutoPlay} onChange={event => { setLiveAutoPlay(event.target.checked); if (liveAudioRef.current) liveAudioRef.current.muted = !event.target.checked }} />自动播放译文语音</label><div className="live-controls">{liveState === 'idle' || liveState === 'error' ? <button className="btn btn-primary" onClick={startLiveSession}>{liveState === 'error' ? '重新连接' : '开始 Live 翻译'}</button> : <><button className="btn btn-outline" onClick={toggleLivePause}>{liveState === 'paused' ? '继续收音' : '暂停收音'}</button><button className="btn btn-primary" onClick={() => endLiveSession()}>结束会话</button></>}</div><p className="voice-privacy">不保存原始音频，也不会在后台监听。本次会话的临时文字会在结束时清空。</p>{liveError && <div className="empty-state"><p>{liveError}</p><span>请检查网络后重新连接。</span></div>}<div className="live-turns">{liveTurns.length === 0 ? <p className="empty-state">会话开始后，双语内容会在这里出现。</p> : liveTurns.map(turn => <article className="voice-turn" key={turn.id}><small>{turn.direction === 'zh-en' ? '中文 → English' : 'English → 中文'}</small><p>{turn.original}</p><strong>{turn.translation}</strong></article>)}</div></section>}
+    {active === 'live' && <section className="content-block live-chat"><div className="section-head"><div><p>连续双语对话</p><h2>实时翻译</h2></div><span className={`live-state ${liveState}`}>{liveState === 'connected' ? '已连接' : liveState === 'connecting' ? '正在连接' : liveState === 'paused' ? '已暂停' : '未开始'}</span></div><p className="voice-intro">开始后才会使用麦克风。系统会把你说的中文翻译成英文并播放给对方听；结束会话即停止收音并清空临时文字。</p><div className="live-scenarios">{['餐厅', '酒店', '交通', '日常交流'].map(scenario => <button key={scenario} className={liveScenario === scenario ? 'selected' : ''} onClick={() => setLiveScenario(scenario)} disabled={liveState === 'connected' || liveState === 'paused'}>{scenario}</button>)}</div><label className="autoplay-control"><input type="checkbox" checked={liveAutoPlay} onChange={event => { setLiveAutoPlay(event.target.checked); if (liveAudioRef.current) liveAudioRef.current.muted = !event.target.checked }} />自动播放英文语音</label><div className="live-controls">{liveState === 'idle' || liveState === 'error' ? <button className="btn btn-primary" onClick={startLiveSession}>{liveState === 'error' ? '重新连接' : '开始 Live 翻译'}</button> : <><button className="btn btn-outline" onClick={toggleLivePause}>{liveState === 'paused' ? '继续收音' : '暂停收音'}</button><button className="btn btn-primary" onClick={() => endLiveSession()}>结束会话</button></>}</div><p className="voice-privacy">不保存原始音频，也不会在后台监听。本次会话的临时文字会在结束时清空。</p>{liveError && <div className="empty-state"><p>{liveError}</p><span>请检查网络后重新连接。</span></div>}<div className="live-turns">{liveTurns.length === 0 ? <p className="empty-state">开始说中文后，中英文内容会在这里出现。</p> : liveTurns.map(turn => <article className="voice-turn" key={turn.id}><small>中文 → English</small><p>{turn.original}</p><strong>{turn.translation}</strong></article>)}</div></section>}
     <nav className="bottom-nav" aria-label="主导航"><button className={active === 'plan' ? 'selected' : ''} onClick={() => setActive('plan')}><Compass size={19}/>行程</button><button className={active === 'guide' ? 'selected' : ''} onClick={() => setActive('guide')}><MapPin size={19}/>导览</button><button className={active === 'translate' ? 'selected' : ''} onClick={() => setActive('translate')}><ImagePlus size={19}/>翻译</button><button className={active === 'live' ? 'selected' : ''} onClick={() => setActive('live')}><Languages size={19}/>沟通</button></nav>
     {showLogin && <div className="modal-backdrop" role="presentation"><section className="login-dialog" role="dialog" aria-modal="true" aria-label="登录英伦旅伴"><button className="modal-close" onClick={() => setShowLogin(false)} aria-label="关闭"><X/></button><div className="login-mark"><ShieldCheck size={27}/></div><p>英伦旅伴 · 私密旅行档案</p><h2>登录后继续</h2><span>使用 HowOne 账户登录。你的行程、导览和翻译记录仅属于你。</span>{loginStep === 'identity' ? <><div className="auth-methods"><button className={authMethod === 'phone' ? 'selected' : ''} onClick={() => { setAuthMethod('phone'); setLoginError('') }}>手机号登录</button><button className={authMethod === 'email' ? 'selected' : ''} onClick={() => { setAuthMethod('email'); setLoginError('') }}>邮箱登录</button></div>{authMethod === 'phone' ? <label>手机号<input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+447700900123" autoComplete="tel" /></label> : <label>邮箱地址<input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" autoComplete="email" /></label>}<button className="btn btn-primary" onClick={sendCode} disabled={loginBusy}>{loginBusy ? '发送中…' : '发送验证码'}</button></> : <><label>{authMethod === 'phone' ? '手机验证码' : '邮箱验证码'}<input inputMode="numeric" value={code} onChange={e => setCode(e.target.value)} placeholder="输入收到的验证码" autoComplete="one-time-code" /></label><button className="btn btn-primary" onClick={completeLogin} disabled={loginBusy}>{loginBusy ? '登录中…' : '验证并登录'}</button><button className="text-button" onClick={() => setLoginStep('identity')}>更换登录方式</button></>}{loginError && <div className="login-error">{loginError}</div>}</section></div>}
     <footer className="footer-statement">走慢一点，英国会更清楚。<span>天气：<a href={WEATHER_SOURCE} target="_blank" rel="noreferrer">Open-Meteo</a> · 地点：<a href={OSM_SOURCE} target="_blank" rel="noreferrer">OpenStreetMap</a></span></footer>

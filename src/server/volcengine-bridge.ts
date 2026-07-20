@@ -62,13 +62,14 @@ export function attachVolcengineBridge(server: import('node:http').Server) {
       if (!appId || !accessToken) { fail(`实时沟通尚未配置：缺少 ${!appId ? 'VOLCENGINE_APPID' : ''}${!appId && !accessToken ? ' 与 ' : ''}${!accessToken ? 'VOLCENGINE_APP_ACCESS_TOKEN' : ''}。请在服务端运行环境中设置后重新启动服务。`); return }
       started = true; sessionId = randomUUID()
       upstream = new WebSocket(upstreamUrl, { handshakeTimeout: 12_000, headers: { 'X-Api-App-ID': appId, 'X-Api-Access-Key': accessToken, 'X-Api-Resource-Id': 'volc.speech.dialog', 'X-Api-App-Key': 'PlgvMymc7f3tQnJ6', 'X-Api-Connect-Id': randomUUID() } })
+      upstream.on('upgrade', response => console.info(`[volcengine-realtime] connected logid=${response.headers['x-tt-logid'] ?? 'unknown'}`))
       upstream.on('open', () => upstream?.send(eventFrame(1, {})))
       upstream.on('message', data => {
         const frame = parseFrame(Buffer.from(data as Buffer)); const payload = decodeJson(frame.payload)
-        if (frame.type === 15 || frame.event === 51 || frame.event === 153 || frame.event === 599) { fail(String(payload.error ?? payload.message ?? `实时服务错误${frame.code ? ` (${frame.code})` : ''}`)); return }
+        if (frame.type === 15 || frame.event === 51 || frame.event === 153 || frame.event === 599) { console.error('[volcengine-realtime] upstream error', { event: frame.event, code: frame.code, payload }); fail(String(payload.error ?? payload.message ?? `实时服务错误${frame.code ? ` (${frame.code})` : ''}`)); return }
         if (frame.event === 50) {
           const source = message.direction === 'zh-en' ? 'Chinese' : 'English'; const target = message.direction === 'zh-en' ? 'English' : 'Simplified Chinese'
-          upstream?.send(eventFrame(100, { asr: { audio_info: { format: 'speech_opus', sample_rate: 16000, channel: 1 }, extra: {} }, dialog: { bot_name: 'Travel Interpreter', system_role: `You are a concise ${source} to ${target} travel interpreter for ${scenarios[message.scenario]}. Translate only what the speaker says. Preserve names, prices, addresses, and requests.`, speaking_style: 'clear and natural', extra: { model: '1.2.1.1', input_mod: 'keep_alive', enable_conversation_truncate: true } }, tts: { speaker: 'zh_female_vv_jupiter_bigtts', extra: {} } }, sessionId))
+          upstream?.send(eventFrame(100, { asr: { audio_info: { format: 'pcm', sample_rate: 16000, channel: 1 }, extra: {} }, dialog: { bot_name: 'Travel Interpreter', system_role: `You are a concise ${source} to ${target} travel interpreter for ${scenarios[message.scenario]}. Translate only what the speaker says. Preserve names, prices, addresses, and requests.`, speaking_style: 'clear and natural', extra: { model: '1.2.1.1', input_mod: 'keep_alive', enable_conversation_truncate: true } }, tts: { speaker: 'zh_female_vv_jupiter_bigtts', extra: {} } }, sessionId))
         } else if (frame.event === 150) send({ type: 'ready' })
         else if (frame.event === 451) { const result = Array.isArray(payload.results) ? payload.results[0] as { text?: string; is_interim?: boolean } : undefined; if (result?.text) send({ type: 'asr', text: result.text, interim: Boolean(result.is_interim) }) }
         else if (frame.event === 550) { const content = String(payload.content ?? ''); if (content) send({ type: 'translation', text: content }) }
