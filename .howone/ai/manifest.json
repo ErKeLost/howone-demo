@@ -1,0 +1,176 @@
+{
+  "appId": "2t787fq",
+  "capabilities": [
+    {
+      "appId": "2t787fq",
+      "name": "generateAttractionGuide",
+      "description": "Creates a warm Chinese historical and cultural guide for a UK attraction, tailored for a family visit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "attraction_name": {
+            "type": "string",
+            "description": "Name of the attraction."
+          },
+          "visitor_context": {
+            "type": "string",
+            "description": "Optional family needs, child ages, interests, and visit timing."
+          },
+          "guide_language": {
+            "type": "string",
+            "description": "Guide language, normally Simplified Chinese."
+          }
+        },
+        "required": [
+          "attraction_name"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "guide_text": {
+            "type": "string",
+            "description": "Family-friendly historical and cultural attraction guide in the requested language."
+          }
+        },
+        "required": [
+          "guide_text"
+        ]
+      },
+      "outputEntityName": "AttractionGuide",
+      "workflowId": "1e9e395a-5d0f-4b6f-af83-329fd88f286f",
+      "status": "active",
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "appId": "2t787fq",
+      "name": "generateChineseAudioGuide",
+      "description": "Generates a Chinese audio guide from approved attraction-guide text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "guide_script": {
+            "type": "string",
+            "description": "Chinese guide script to narrate."
+          },
+          "audio_language": {
+            "type": "string",
+            "description": "Narration language, normally Chinese."
+          },
+          "voice_hint": {
+            "type": "string",
+            "description": "Optional voice preference for a calm, family-friendly narration."
+          }
+        },
+        "required": [
+          "guide_script"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "audio_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the generated Chinese audio guide."
+          }
+        },
+        "required": [
+          "audio_url"
+        ]
+      },
+      "outputEntityName": "AttractionGuide",
+      "workflowId": "8d8b1379-85d6-462b-ab76-46e0b861c621",
+      "status": "active",
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "appId": "2t787fq",
+      "name": "generateFamilyItinerary",
+      "description": "Creates a family-friendly multi-day UK itinerary with clear disruption alternatives and reasons in Chinese.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trip_brief": {
+            "type": "string",
+            "description": "Arrival, departure, destinations, family composition, preferences, and any travel constraints."
+          },
+          "weather_context": {
+            "type": "string",
+            "description": "Optional current or forecast weather context supplied by the application."
+          },
+          "language": {
+            "type": "string",
+            "description": "Output language, normally Simplified Chinese."
+          }
+        },
+        "required": [
+          "trip_brief"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "itinerary_plan": {
+            "type": "string",
+            "description": "A structured multi-day itinerary in the requested language, including family pacing and disruption alternatives with reasons."
+          }
+        },
+        "required": [
+          "itinerary_plan"
+        ]
+      },
+      "outputEntityName": "ItineraryDay",
+      "workflowId": "669a7d6e-5054-4af4-9d25-25b0c052d2e8",
+      "status": "active",
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "appId": "2t787fq",
+      "name": "translateTravelImage",
+      "description": "Reads English text in a travel image and returns a Chinese translation with an annotated image when supported.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source_image_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Accessible URL of a menu, road sign, or exhibit image."
+          },
+          "translation_context": {
+            "type": "string",
+            "description": "Optional context such as menu, road sign, or exhibit."
+          },
+          "target_language": {
+            "type": "string",
+            "description": "Target translation language, normally Simplified Chinese."
+          }
+        },
+        "required": [
+          "source_image_url"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "translated_text": {
+            "type": "string",
+            "description": "Chinese translation of the detected English text, written in the target language."
+          },
+          "annotated_image_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of an image annotated with the translated text when supported."
+          }
+        },
+        "required": [
+          "translated_text"
+        ]
+      },
+      "outputEntityName": "TranslationHistory",
+      "workflowId": "ccffbf75-be24-4c79-bd52-3f846ab8ec2b",
+      "status": "active",
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    }
+  ]
+}

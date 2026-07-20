@@ -1,0 +1,4 @@
+interface:
+  display_name: "HowOne"
+  short_description: "Generated app platform: scope-first architecture, optional entity schema, AI capabilities, and SDK integration from synced contracts."
+  default_prompt: "Load howone, read 01-architect/01-app-generation.md, then the smallest track files from SKILL.md for this request. Scope follows the user—not every app needs AI or backend."

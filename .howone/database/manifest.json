@@ -1,0 +1,481 @@
+{
+  "appId": "2t787fq",
+  "entities": [
+    {
+      "name": "AttractionGuide",
+      "appId": "2t787fq",
+      "type": "object",
+      "visibility": "private",
+      "access": {
+        "authenticated": {
+          "read": "own",
+          "create": "own",
+          "update": "own",
+          "delete": "own"
+        },
+        "public": {
+          "read": "none",
+          "create": "none",
+          "update": "none",
+          "delete": "none"
+        }
+      },
+      "indexes": [
+        {
+          "name": "owner_attraction_updated",
+          "fields": [
+            "attractionName",
+            "updatedDate"
+          ],
+          "scope": "owner",
+          "unique": false,
+          "order": {
+            "updatedDate": "desc"
+          }
+        }
+      ],
+      "presentation": {
+        "titleField": "attractionName",
+        "defaultSort": {
+          "field": "updatedDate",
+          "order": "desc"
+        },
+        "listFields": [
+          "attractionName",
+          "updatedDate"
+        ]
+      },
+      "lifecycle": {
+        "audit": true,
+        "softDelete": true
+      },
+      "performance": {
+        "defaultLimit": 30,
+        "maxLimit": 100,
+        "allowedSorts": [
+          "updatedDate"
+        ]
+      },
+      "isActive": true,
+      "description": "A private Chinese attraction guide and generated audio reference.",
+      "properties": {
+        "attractionName": {
+          "type": "string",
+          "description": "UK attraction name.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "audioUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Generated Chinese audio guide URL.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "guideText": {
+          "type": "string",
+          "description": "Chinese history and cultural guide text.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "locationLabel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Human-readable UK location.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "sourceUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Traceable public source URL used as factual context for the guide.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "sourceName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Public source name used for guide context.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "sourceExcerpt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Public factual excerpt supplied to the guide generation workflow.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        }
+      },
+      "required": [
+        "attractionName",
+        "guideText"
+      ],
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "name": "ItineraryDay",
+      "appId": "2t787fq",
+      "type": "object",
+      "visibility": "private",
+      "access": {
+        "authenticated": {
+          "read": "own",
+          "create": "own",
+          "update": "own",
+          "delete": "own"
+        },
+        "public": {
+          "read": "none",
+          "create": "none",
+          "update": "none",
+          "delete": "none"
+        }
+      },
+      "indexes": [
+        {
+          "name": "owner_trip_day",
+          "fields": [
+            "tripId",
+            "dayNumber"
+          ],
+          "scope": "owner",
+          "unique": false,
+          "order": {
+            "dayNumber": "asc"
+          }
+        }
+      ],
+      "presentation": {
+        "titleField": "title",
+        "defaultSort": {
+          "field": "dayNumber",
+          "order": "asc"
+        },
+        "listFields": [
+          "title",
+          "dayNumber",
+          "status",
+          "updatedDate"
+        ]
+      },
+      "lifecycle": {
+        "audit": true,
+        "softDelete": true
+      },
+      "performance": {
+        "defaultLimit": 30,
+        "maxLimit": 100,
+        "allowedSorts": [
+          "dayNumber",
+          "updatedDate"
+        ]
+      },
+      "isActive": true,
+      "description": "A private editable daily itinerary with source provenance and disruption alternatives.",
+      "properties": {
+        "alternativeReason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Reason for weather or venue alternative.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "alternativeTitle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Suggested alternative activity.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "dayNumber": {
+          "type": "integer",
+          "description": "Day sequence within the trip.",
+          "_processedType": "integer",
+          "_isNullable": false
+        },
+        "planContent": {
+          "type": "string",
+          "description": "Editable itinerary text or structured content.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "status": {
+          "type": "string",
+          "description": "Itinerary status.",
+          "default": "draft",
+          "enum": [
+            "draft",
+            "ready",
+            "adjusted"
+          ],
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Daily itinerary title.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "tripId": {
+          "type": "string",
+          "description": "Related Trip record identifier.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "weatherSummary": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Weather context used when planning.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        }
+      },
+      "required": [
+        "tripId",
+        "dayNumber",
+        "title",
+        "planContent"
+      ],
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "name": "TranslationHistory",
+      "appId": "2t787fq",
+      "type": "object",
+      "visibility": "private",
+      "access": {
+        "authenticated": {
+          "read": "own",
+          "create": "own",
+          "update": "own",
+          "delete": "own"
+        },
+        "public": {
+          "read": "none",
+          "create": "none",
+          "update": "none",
+          "delete": "none"
+        }
+      },
+      "indexes": [
+        {
+          "name": "owner_updated",
+          "fields": [
+            "updatedDate"
+          ],
+          "scope": "owner",
+          "unique": false,
+          "order": {
+            "updatedDate": "desc"
+          }
+        }
+      ],
+      "presentation": {
+        "titleField": "sourceLabel",
+        "imageField": "sourceImageUrl",
+        "defaultSort": {
+          "field": "updatedDate",
+          "order": "desc"
+        },
+        "listFields": [
+          "sourceLabel",
+          "translatedText",
+          "updatedDate"
+        ]
+      },
+      "lifecycle": {
+        "audit": true,
+        "softDelete": true
+      },
+      "performance": {
+        "defaultLimit": 50,
+        "maxLimit": 100,
+        "allowedSorts": [
+          "updatedDate"
+        ]
+      },
+      "isActive": true,
+      "description": "Private travel-image translation history with optional annotated result.",
+      "properties": {
+        "annotatedImageUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Annotated image result when supported.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        },
+        "sourceImageUrl": {
+          "type": "string",
+          "description": "Uploaded original image URL.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "sourceLabel": {
+          "type": "string",
+          "description": "Short label for menu, road sign, or exhibit.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "translatedText": {
+          "type": "string",
+          "description": "Chinese translation text.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "translationContext": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Selected translation context.",
+          "default": null,
+          "_processedType": "string",
+          "_isNullable": true
+        }
+      },
+      "required": [
+        "sourceImageUrl",
+        "sourceLabel",
+        "translatedText"
+      ],
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    },
+    {
+      "name": "Trip",
+      "appId": "2t787fq",
+      "type": "object",
+      "visibility": "private",
+      "access": {
+        "authenticated": {
+          "read": "own",
+          "create": "own",
+          "update": "own",
+          "delete": "own"
+        },
+        "public": {
+          "read": "none",
+          "create": "none",
+          "update": "none",
+          "delete": "none"
+        }
+      },
+      "indexes": [
+        {
+          "name": "owner_updated",
+          "fields": [
+            "updatedDate"
+          ],
+          "scope": "owner",
+          "unique": false,
+          "order": {
+            "updatedDate": "desc"
+          }
+        }
+      ],
+      "presentation": {
+        "titleField": "title",
+        "defaultSort": {
+          "field": "updatedDate",
+          "order": "desc"
+        },
+        "listFields": [
+          "title",
+          "arrivalDate",
+          "departureDate",
+          "updatedDate"
+        ]
+      },
+      "lifecycle": {
+        "audit": true,
+        "softDelete": true
+      },
+      "performance": {
+        "defaultLimit": 20,
+        "maxLimit": 100,
+        "allowedSorts": [
+          "updatedDate",
+          "arrivalDate"
+        ]
+      },
+      "isActive": true,
+      "description": "A private family UK travel plan and onboarding preferences.",
+      "properties": {
+        "arrivalDate": {
+          "type": "date",
+          "description": "UK arrival date.",
+          "_processedType": "date",
+          "_isNullable": false
+        },
+        "departureDate": {
+          "type": "date",
+          "description": "UK departure date.",
+          "_processedType": "date",
+          "_isNullable": false
+        },
+        "destinations": {
+          "type": "array",
+          "description": "UK destinations selected for the trip.",
+          "items": {
+            "type": "string"
+          },
+          "_processedType": "array",
+          "_isNullable": false
+        },
+        "familySummary": {
+          "type": "string",
+          "description": "Family composition and child ages.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "preferences": {
+          "type": "string",
+          "description": "Travel pace and family preferences.",
+          "_processedType": "string",
+          "_isNullable": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Trip title shown in the traveler dashboard.",
+          "_processedType": "string",
+          "_isNullable": false
+        }
+      },
+      "required": [
+        "title",
+        "arrivalDate",
+        "departureDate",
+        "destinations"
+      ],
+      "createdById": "6a5cddecb70cda9fe2acfe96"
+    }
+  ]
+}
